@@ -337,7 +337,7 @@ class Llama2
     {
         // W (d,n) @ x (n,) -> xout (d,)
         // by far the most amount of time is spent inside this little function
-        Parallel.For(0, d, i =>
+        Parallel.For(0, d, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, i =>
         {
             float val = 0f;
             var wp = wSegment.Pointer;
