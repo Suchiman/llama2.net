@@ -26,9 +26,11 @@ readonly struct BigMemory<T> where T : unmanaged
 
     public Span<T> Span => GetSpan();
 
+    public unsafe T* Pointer => (T*)(_ptr + _start);
+
     public unsafe Span<T> GetSpan()
     {
-        return new Span<T>(_ptr + _start, checked((int)_length));
+        return new Span<T>(_ptr + _start, (int)_length);
     }
 
     public unsafe BigMemory<T> Slice(long start)
@@ -330,7 +332,7 @@ class Llama2
         }
     }
 
-    static void matmul(float[] xout, float[] x, BigMemory<float> wSegment, int n, int d)
+    static unsafe void matmul(float[] xout, float[] x, BigMemory<float> wSegment, int n, int d)
     {
         // W (d,n) @ x (n,) -> xout (d,)
         // by far the most amount of time is spent inside this little function
@@ -338,36 +340,39 @@ class Llama2
         {
             float val = 0f;
             int j = 0;
-            var w = wSegment.Span;
-            if (Vector256.IsHardwareAccelerated && Fma.IsSupported)
+            var wp = wSegment.Pointer;
+            fixed (float* xp = x)
             {
-                Vector256<float> sum0 = Vector256<float>.Zero;
-                Vector256<float> sum1 = Vector256<float>.Zero;
-                Vector256<float> sum2 = Vector256<float>.Zero;
-                Vector256<float> sum3 = Vector256<float>.Zero;
-                int width = Vector256<float>.Count;
-                int upperBound = n - n % (4 * width);
-                for (; j < upperBound; j += 4 * width)
+                if (Vector256.IsHardwareAccelerated && Fma.IsSupported)
                 {
-                    var wj0 = Vector256.LoadUnsafe(ref w[i * n + j + 0 * width]);
-                    var wj1 = Vector256.LoadUnsafe(ref w[i * n + j + 1 * width]);
-                    var wj2 = Vector256.LoadUnsafe(ref w[i * n + j + 2 * width]);
-                    var wj3 = Vector256.LoadUnsafe(ref w[i * n + j + 3 * width]);
-                    var xj0 = Vector256.LoadUnsafe(ref x[j + 0 * width]);
-                    var xj1 = Vector256.LoadUnsafe(ref x[j + 1 * width]);
-                    var xj2 = Vector256.LoadUnsafe(ref x[j + 2 * width]);
-                    var xj3 = Vector256.LoadUnsafe(ref x[j + 3 * width]);
-                    sum0 = Fma.MultiplyAdd(wj0, xj0, sum0);
-                    sum1 = Fma.MultiplyAdd(wj1, xj1, sum1);
-                    sum2 = Fma.MultiplyAdd(wj2, xj2, sum2);
-                    sum3 = Fma.MultiplyAdd(wj3, xj3, sum3);
+                    Vector256<float> sum0 = Vector256<float>.Zero;
+                    Vector256<float> sum1 = Vector256<float>.Zero;
+                    Vector256<float> sum2 = Vector256<float>.Zero;
+                    Vector256<float> sum3 = Vector256<float>.Zero;
+                    int width = Vector256<float>.Count;
+                    int upperBound = n - n % (4 * width);
+                    for (; j < upperBound; j += 4 * width)
+                    {
+                        var wj0 = Vector256.Load(&wp[i * n + j + 0 * width]);
+                        var wj1 = Vector256.Load(&wp[i * n + j + 1 * width]);
+                        var wj2 = Vector256.Load(&wp[i * n + j + 2 * width]);
+                        var wj3 = Vector256.Load(&wp[i * n + j + 3 * width]);
+                        var xj0 = Vector256.Load(&xp[j + 0 * width]);
+                        var xj1 = Vector256.Load(&xp[j + 1 * width]);
+                        var xj2 = Vector256.Load(&xp[j + 2 * width]);
+                        var xj3 = Vector256.Load(&xp[j + 3 * width]);
+                        sum0 = Fma.MultiplyAdd(wj0, xj0, sum0);
+                        sum1 = Fma.MultiplyAdd(wj1, xj1, sum1);
+                        sum2 = Fma.MultiplyAdd(wj2, xj2, sum2);
+                        sum3 = Fma.MultiplyAdd(wj3, xj3, sum3);
+                    }
+                    val = Vector256.Sum(sum0 + sum1 + sum2 + sum3);
                 }
-                val = Vector256.Sum(sum0 + sum1 + sum2 + sum3);
-            }
 
-            for (; j < n; j++)
-            {
-                val += w[i * n + j] * x[j];
+                for (; j < n; j++)
+                {
+                    val += wp[i * n + j] * xp[j];
+                }
             }
             xout[i] = val;
         });
