@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO.MemoryMappedFiles;
+using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using System.Text;
@@ -339,43 +340,55 @@ class Llama2
         Parallel.For(0, d, i =>
         {
             float val = 0f;
-            int j = 0;
             var wp = wSegment.Pointer;
             fixed (float* xp = x)
             {
                 if (Vector256.IsHardwareAccelerated && Fma.IsSupported)
                 {
-                    Vector256<float> sum0 = Vector256<float>.Zero;
-                    Vector256<float> sum1 = Vector256<float>.Zero;
-                    Vector256<float> sum2 = Vector256<float>.Zero;
-                    Vector256<float> sum3 = Vector256<float>.Zero;
-                    int width = Vector256<float>.Count;
-                    int upperBound = n - n % (4 * width);
-                    for (; j < upperBound; j += 4 * width)
-                    {
-                        var wj0 = Vector256.Load(&wp[i * n + j + 0 * width]);
-                        var wj1 = Vector256.Load(&wp[i * n + j + 1 * width]);
-                        var wj2 = Vector256.Load(&wp[i * n + j + 2 * width]);
-                        var wj3 = Vector256.Load(&wp[i * n + j + 3 * width]);
-                        var xj0 = Vector256.Load(&xp[j + 0 * width]);
-                        var xj1 = Vector256.Load(&xp[j + 1 * width]);
-                        var xj2 = Vector256.Load(&xp[j + 2 * width]);
-                        var xj3 = Vector256.Load(&xp[j + 3 * width]);
-                        sum0 = Fma.MultiplyAdd(wj0, xj0, sum0);
-                        sum1 = Fma.MultiplyAdd(wj1, xj1, sum1);
-                        sum2 = Fma.MultiplyAdd(wj2, xj2, sum2);
-                        sum3 = Fma.MultiplyAdd(wj3, xj3, sum3);
-                    }
-                    val = Vector256.Sum(sum0 + sum1 + sum2 + sum3);
+                    val = matmul_simd((nuint)n, (nuint)i, wp, xp);
                 }
-
-                for (; j < n; j++)
+                else
                 {
-                    val += wp[i * n + j] * xp[j];
+                    for (int j = 0; j < n; j++)
+                    {
+                        val += wp[i * n + j] * xp[j];
+                    }
                 }
             }
             xout[i] = val;
         });
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static unsafe float matmul_simd(nuint n, nuint i, float* wp, float* xp)
+    {
+        Vector256<float> sum0 = Vector256<float>.Zero;
+        Vector256<float> sum1 = Vector256<float>.Zero;
+        Vector256<float> sum2 = Vector256<float>.Zero;
+        Vector256<float> sum3 = Vector256<float>.Zero;
+        nuint width = (nuint)Vector256<float>.Count;
+        nuint upperBound = n - n % (4 * width);
+        nuint j = 0;
+
+        for (; j < upperBound; j += 4 * width)
+        {
+            var wj0 = Vector256.Load(&wp[i * n + j + 0 * width]);
+            var wj1 = Vector256.Load(&wp[i * n + j + 1 * width]);
+            var wj2 = Vector256.Load(&wp[i * n + j + 2 * width]);
+            var wj3 = Vector256.Load(&wp[i * n + j + 3 * width]);
+            var xj0 = Vector256.Load(&xp[j + 0 * width]);
+            var xj1 = Vector256.Load(&xp[j + 1 * width]);
+            var xj2 = Vector256.Load(&xp[j + 2 * width]);
+            var xj3 = Vector256.Load(&xp[j + 3 * width]);
+            sum0 = Fma.MultiplyAdd(wj0, xj0, sum0);
+            sum1 = Fma.MultiplyAdd(wj1, xj1, sum1);
+            sum2 = Fma.MultiplyAdd(wj2, xj2, sum2);
+            sum3 = Fma.MultiplyAdd(wj3, xj3, sum3);
+        }
+        float val = Vector256.Sum(sum0 + sum1 + sum2 + sum3);
+        for (; j < n; j++)
+            val += wp[i * n + j] * xp[j];
+        return val;
     }
 
     static float[] forward(Transformer transformer, int token, int pos)
