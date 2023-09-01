@@ -386,7 +386,7 @@ class Llama2
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static Vector<float> fma(Vector<float> a, Vector<float> b, Vector<float> c)
         {
-            if (Fma.IsSupported)
+            if (Fma.IsSupported && Vector<float>.Count is 8)
             {
                 // (a * b) + c
                 return Fma.MultiplyAdd(
@@ -394,7 +394,7 @@ class Llama2
                     b.AsVector256(),
                     c.AsVector256()).AsVector();
             }
-            else if (AdvSimd.IsSupported)
+            else if (AdvSimd.IsSupported && Vector<float>.Count is 4)
             {
                 // c + (a * b)
                 return AdvSimd.FusedMultiplyAdd(
