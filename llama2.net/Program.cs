@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.IO.MemoryMappedFiles;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 using System.Text;
 
@@ -343,17 +345,7 @@ class Llama2
             var wp = wSegment.Pointer;
             fixed (float* xp = x)
             {
-                if (Vector256.IsHardwareAccelerated && Fma.IsSupported)
-                {
-                    val = matmul_simd((nuint)n, (nuint)i, wp, xp);
-                }
-                else
-                {
-                    for (int j = 0; j < n; j++)
-                    {
-                        val += wp[i * n + j] * xp[j];
-                    }
-                }
+                val = matmul_simd((nuint)n, (nuint)i, wp, xp);
             }
             xout[i] = val;
         });
@@ -362,33 +354,59 @@ class Llama2
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static unsafe float matmul_simd(nuint n, nuint i, float* wp, float* xp)
     {
-        Vector256<float> sum0 = Vector256<float>.Zero;
-        Vector256<float> sum1 = Vector256<float>.Zero;
-        Vector256<float> sum2 = Vector256<float>.Zero;
-        Vector256<float> sum3 = Vector256<float>.Zero;
-        nuint width = (nuint)Vector256<float>.Count;
+        Vector<float> sum0 = Vector<float>.Zero;
+        Vector<float> sum1 = Vector<float>.Zero;
+        Vector<float> sum2 = Vector<float>.Zero;
+        Vector<float> sum3 = Vector<float>.Zero;
+        nuint width = (nuint)Vector<float>.Count;
         nuint upperBound = n - n % (4 * width);
         nuint j = 0;
 
         for (; j < upperBound; j += 4 * width)
         {
-            var wj0 = Vector256.Load(&wp[i * n + j + 0 * width]);
-            var wj1 = Vector256.Load(&wp[i * n + j + 1 * width]);
-            var wj2 = Vector256.Load(&wp[i * n + j + 2 * width]);
-            var wj3 = Vector256.Load(&wp[i * n + j + 3 * width]);
-            var xj0 = Vector256.Load(&xp[j + 0 * width]);
-            var xj1 = Vector256.Load(&xp[j + 1 * width]);
-            var xj2 = Vector256.Load(&xp[j + 2 * width]);
-            var xj3 = Vector256.Load(&xp[j + 3 * width]);
-            sum0 = Fma.MultiplyAdd(wj0, xj0, sum0);
-            sum1 = Fma.MultiplyAdd(wj1, xj1, sum1);
-            sum2 = Fma.MultiplyAdd(wj2, xj2, sum2);
-            sum3 = Fma.MultiplyAdd(wj3, xj3, sum3);
+            // In .NET 8, we actually want to just use V256, it perfectly unrolls to V128x2 for NEON or SSE2
+            var wj0 = Unsafe.Read<Vector<float>>(&wp[i * n + j + 0 * width]);
+            var wj1 = Unsafe.Read<Vector<float>>(&wp[i * n + j + 1 * width]);
+            var wj2 = Unsafe.Read<Vector<float>>(&wp[i * n + j + 2 * width]);
+            var wj3 = Unsafe.Read<Vector<float>>(&wp[i * n + j + 3 * width]);
+            var xj1 = Unsafe.Read<Vector<float>>(&xp[j + 1 * width]);
+            var xj0 = Unsafe.Read<Vector<float>>(&xp[j + 0 * width]);
+            var xj2 = Unsafe.Read<Vector<float>>(&xp[j + 2 * width]);
+            var xj3 = Unsafe.Read<Vector<float>>(&xp[j + 3 * width]);
+            sum0 = fma(wj0, xj0, sum0);
+            sum1 = fma(wj1, xj1, sum1);
+            sum2 = fma(wj2, xj2, sum2);
+            sum3 = fma(wj3, xj3, sum3);
         }
-        float val = Vector256.Sum(sum0 + sum1 + sum2 + sum3);
+        float val = Vector.Sum(sum0 + sum1 + sum2 + sum3);
         for (; j < n; j++)
             val += wp[i * n + j] * xp[j];
         return val;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static Vector<float> fma(Vector<float> a, Vector<float> b, Vector<float> c)
+        {
+            if (Fma.IsSupported && Vector<float>.Count is 8)
+            {
+                // (a * b) + c
+                return Fma.MultiplyAdd(
+                    a.AsVector256(),
+                    b.AsVector256(),
+                    c.AsVector256()).AsVector();
+            }
+            else if (AdvSimd.IsSupported && Vector<float>.Count is 4)
+            {
+                // c + (a * b)
+                return AdvSimd.FusedMultiplyAdd(
+                    c.AsVector128(),
+                    a.AsVector128(),
+                    b.AsVector128()).AsVector();
+            }
+            else
+            {
+                return (a * b) + c;
+            }
+        }
     }
 
     static float[] forward(Transformer transformer, int token, int pos)
