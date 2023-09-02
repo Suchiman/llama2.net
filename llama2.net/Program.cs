@@ -38,7 +38,7 @@ readonly struct BigMemory<T> where T : unmanaged
 
     public unsafe BigMemory<T> Slice(long start)
     {
-        if ((uint)start > (uint)_length)
+        if ((ulong)start > (ulong)_length)
             throw new ArgumentOutOfRangeException(nameof(start));
 
         return new BigMemory<T>(_ptr, _start + start, _length - start);
@@ -46,7 +46,7 @@ readonly struct BigMemory<T> where T : unmanaged
 
     public unsafe BigMemory<T> Slice(long start, long length)
     {
-        if ((uint)start > (uint)_length || (uint)length > (uint)(_length - start))
+        if ((ulong)start > (ulong)_length || (ulong)length > (ulong)(_length - start))
             throw new ArgumentOutOfRangeException();
 
         return new BigMemory<T>(_ptr, _start + start, length);
