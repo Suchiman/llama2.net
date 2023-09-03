@@ -294,44 +294,45 @@ class Llama2
     static void rmsnorm(float[] o, float[] x, BigMemory<float> weight, int size)
     {
         // calculate sum of squares
+        var xSpan = x.AsSpan(0, size);
         float ss = 0.0f;
-        for (int j = 0; j < size; j++)
+        for (int j = 0; j < xSpan.Length; j++)
         {
-            ss += x[j] * x[j];
+            ss += xSpan[j] * xSpan[j];
         }
         ss /= size;
         ss += 1e-5f;
         ss = 1.0f / (float)Math.Sqrt(ss);
         var w = weight.Span;
         // normalize and scale
-        for (int j = 0; j < size; j++)
+        for (int j = 0; j < xSpan.Length; j++)
         {
-            o[j] = w[j] * (ss * x[j]);
+            o[j] = w[j] * (ss * xSpan[j]);
         }
     }
 
-    static void softmax(float[] x, int xOffset, int size)
+    static void softmax(Span<float> x)
     {
         // find max value (for numerical stability)
-        float max_val = x[0 + xOffset];
-        for (int i = 1; i < size; i++)
+        float max_val = x[0];
+        for (int i = 1; i < x.Length; i++)
         {
-            if (x[i + xOffset] > max_val)
+            if (x[i] > max_val)
             {
-                max_val = x[i + xOffset];
+                max_val = x[i];
             }
         }
         // exp and sum
         float sum = 0.0f;
-        for (int i = 0; i < size; i++)
+        for (int i = 0; i < x.Length; i++)
         {
-            x[i + xOffset] = (float)Math.Exp(x[i + xOffset] - max_val);
-            sum += x[i + xOffset];
+            x[i] = (float)Math.Exp(x[i] - max_val);
+            sum += x[i];
         }
         // normalize
-        for (int i = 0; i < size; i++)
+        for (int i = 0; i < x.Length; i++)
         {
-            x[i + xOffset] /= sum;
+            x[i] /= sum;
         }
     }
 
@@ -489,7 +490,7 @@ class Llama2
                 }
 
                 // softmax the scores to get attention weights, from 0..pos inclusively
-                softmax(s.att, attOffset, pos + 1);
+                softmax(s.att.AsSpan(attOffset, pos + 1));
 
                 // weighted sum of the values, store back into xb
                 // float* xb = s.xb + h * head_size;
@@ -599,7 +600,7 @@ class Llama2
         if (t.sorted_vocab == null)
         {
             // sort vocabulary
-            t.sorted_vocab = new Dictionary<string, int>();
+            t.sorted_vocab = new Dictionary<string, int>(t.vocab_size);
             for (int i = 0; i < t.vocab_size; i++)
             {
                 t.sorted_vocab.Add(t.vocab[i], i);
@@ -748,12 +749,12 @@ class Llama2
 
     // ----------------------------------------------------------------------------
     // sampling can be done in a few ways: greedy argmax, sampling, top-p sampling
-    static int sample_argmax(float[] probabilities, int n)
+    static int sample_argmax(Span<float> probabilities)
     {
         // return the index that has the highest probability
         int max_i = 0;
         float max_p = probabilities[0];
-        for (int i = 1; i < n; i++)
+        for (int i = 1; i < probabilities.Length; i++)
         {
             if (probabilities[i] > max_p)
             {
@@ -764,11 +765,11 @@ class Llama2
         return max_i;
     }
 
-    static int sample_mult(float[] probabilities, int n, float coin)
+    static int sample_mult(Span<float> probabilities, float coin)
     {
         // sample index from probabilities (they must sum to 1!)
         float cdf = 0.0f;
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < probabilities.Length; i++)
         {
             cdf += probabilities[i];
             if (coin < cdf)
@@ -776,7 +777,7 @@ class Llama2
                 return i;
             }
         }
-        return n - 1; // in case of rounding errors
+        return probabilities.Length - 1; // in case of rounding errors
     }
 
     static void swap(int[] array, int from, int to)
@@ -878,7 +879,7 @@ class Llama2
         if (sampler.temperature == 0.0f)
         {
             // greedy argmax sampling: take the token with the highest probability
-            next = sample_argmax(logits, sampler.vocab_size);
+            next = sample_argmax(logits.AsSpan(0, sampler.vocab_size));
         }
         else
         {
@@ -888,14 +889,14 @@ class Llama2
                 logits[q] /= sampler.temperature;
             }
             // apply softmax to the logits to get the probabilities for next token
-            softmax(logits, 0, sampler.vocab_size);
+            softmax(logits.AsSpan(0, sampler.vocab_size));
             // flip a (float) coin (this is our source of entropy for sampling)
             float coin = sampler.random_f32();
             // we sample from this distribution to get the next token
             if (sampler.topp <= 0 || sampler.topp >= 1)
             {
                 // simply sample from the predicted probability distribution
-                next = sample_mult(logits, sampler.vocab_size, coin);
+                next = sample_mult(logits.AsSpan(0, sampler.vocab_size), coin);
             }
             else
             {
