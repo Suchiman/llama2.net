@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.IO.MemoryMappedFiles;
 using System.Numerics;
@@ -302,7 +303,7 @@ class Llama2
         }
         ss /= size;
         ss += 1e-5f;
-        ss = 1.0f / (float)Math.Sqrt(ss);
+        ss = 1.0f / MathF.Sqrt(ss);
         var w = weight.Span;
         // normalize and scale
         for (int j = 0; j < xSpan.Length; j++)
@@ -326,7 +327,7 @@ class Llama2
         float sum = 0.0f;
         for (int i = 0; i < x.Length; i++)
         {
-            x[i] = (float)Math.Exp(x[i] - max_val);
+            x[i] = MathF.Exp(x[i] - max_val);
             sum += x[i];
         }
         // normalize
@@ -441,10 +442,10 @@ class Llama2
             for (int i = 0; i < dim; i += 2)
             {
                 int head_dim = i % head_size;
-                float freq = (float)(1.0 / Math.Pow(10000.0f, head_dim / (float)head_size));
+                float freq = 1.0f / MathF.Pow(10000.0f, head_dim / (float)head_size);
                 float val = pos * freq;
-                float fcr = (float)Math.Cos(val);
-                float fci = (float)Math.Sin(val);
+                float fcr = MathF.Cos(val);
+                float fci = MathF.Sin(val);
                 int rotn = i < kv_dim ? 2 : 1; // how many vectors? 2 = q & k, 1 = q only
                 for (int v = 0; v < rotn; v++)
                 {
@@ -484,7 +485,7 @@ class Llama2
                     {
                         score += s.q[qOffset + i] * s.key_cache[keyCacheOffset + i];
                     }
-                    score /= (float)Math.Sqrt(head_size);
+                    score /= MathF.Sqrt(head_size);
                     // save the score to the attention buffer
                     s.att[attOffset + t] = score;
                 }
@@ -496,7 +497,7 @@ class Llama2
                 // float* xb = s.xb + h * head_size;
                 int xbOffset = h * head_size;
                 // memset(xb, 0, head_size * sizeof(float));
-                Array.Fill(s.xb, 0f, xbOffset, head_size);
+                s.xb.AsSpan(xbOffset, head_size).Clear();
 
                 for (int t = 0; t <= pos; t++)
                 {
@@ -535,7 +536,7 @@ class Llama2
             {
                 float val = s.hb[i];
                 // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-                val *= (float)(1.0f / (1.0f + Math.Exp(-val)));
+                val *= 1.0f / (1.0f + MathF.Exp(-val));
                 // elementwise multiply with w3(x)
                 s.hb[i] = val;
             }
@@ -578,7 +579,7 @@ class Llama2
             char ch = (char)Int32.Parse(hex2, NumberStyles.HexNumber);
             // ok this token is a raw byte token, carefuly to only print printable chars or whitespace
             // some of the other bytes can be various control codes, backspace, etc. => skip
-            bool isPrintable = (32 <= ch && ch < 127);
+            bool isPrintable = 32 <= ch && ch < 127;
             if (isPrintable || char.IsWhiteSpace(ch))
             {
                 piece = ch.ToString();
@@ -675,14 +676,6 @@ class Llama2
     }
 
     // ----------------------------------------------------------------------------
-    // utilities: time / rng
-    static long time_in_ms()
-    {
-        // return time in milliseconds, for benchmarking the model speed
-        return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-    }
-
-    // ----------------------------------------------------------------------------
     // generation loop
     static void generate(Transformer transformer, Tokenizer tokenizer, Sampler sampler, string? prompt, int steps)
     {
@@ -733,7 +726,7 @@ class Llama2
             // init the timer here because the first iteration can be slower
             if (start == 0)
             {
-                start = time_in_ms();
+                start = Stopwatch.GetTimestamp();
             }
         }
 
@@ -742,8 +735,8 @@ class Llama2
         // report achieved tok/s (pos-1 because the timer starts after first iteration)
         if (pos > 1)
         {
-            long end = time_in_ms();
-            Console.Error.WriteLine("\nachieved tok/s: {0}", (pos - 1) / (double)(end - start) * 1000);
+            TimeSpan duration = Stopwatch.GetElapsedTime(start);
+            Console.Error.WriteLine("\nachieved tok/s: {0}", (pos - 1) / duration.TotalSeconds);
         }
     }
 
@@ -780,13 +773,6 @@ class Llama2
         return probabilities.Length - 1; // in case of rounding errors
     }
 
-    static void swap(int[] array, int from, int to)
-    {
-        int tmp = array[from];
-        array[from] = array[to];
-        array[to] = tmp;
-    }
-
     static void siftDown(int[] array, int from, int n, Comparison<int> comparator)
     {
         int prev = from, next;
@@ -799,7 +785,7 @@ class Llama2
             }
             if (comparator(array[next], array[prev]) < 0)
             {
-                swap(array, prev, next);
+                (array[prev], array[next]) = (array[next], array[prev]);
                 prev = next;
             }
             else
@@ -847,7 +833,7 @@ class Llama2
         int last_idx = 0;
         for (int i = n0 - 1; i >= 0; i--)
         {
-            swap(indices, 0, i);
+            (indices[0], indices[i]) = (indices[i], indices[0]);
             cumulative_prob += probabilities[indices[i]];
             if (cumulative_prob > topp)
             {
@@ -893,7 +879,7 @@ class Llama2
             // flip a (float) coin (this is our source of entropy for sampling)
             float coin = sampler.random_f32();
             // we sample from this distribution to get the next token
-            if (sampler.topp <= 0 || sampler.topp >= 1)
+            if (sampler.topp is <= 0 or >= 1)
             {
                 // simply sample from the predicted probability distribution
                 next = sample_mult(logits.AsSpan(0, sampler.vocab_size), coin);
@@ -961,13 +947,13 @@ class Llama2
         // parameter validation/overrides
         if (rng_seed <= 0)
         {
-            rng_seed = time_in_ms();
+            rng_seed = Environment.TickCount64;
         }
-        if (temperature < 0.0)
+        if (temperature < 0.0f)
         {
             temperature = 0.0f;
         }
-        if (topp < 0.0 || 1.0 < topp)
+        if (topp is < 0.0f or > 1.0f)
         {
             topp = 0.9f;
         }
