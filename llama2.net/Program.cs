@@ -365,14 +365,14 @@ class Llama2
         for (; j < upperBound; j += 4 * width)
         {
             // In .NET 8, we actually want to just use V256, it perfectly unrolls to V128x2 for NEON or SSE2
-            var wj0 = Unsafe.Read<Vector<float>>(&wp[i * n + j + 0 * width]);
-            var wj1 = Unsafe.Read<Vector<float>>(&wp[i * n + j + 1 * width]);
-            var wj2 = Unsafe.Read<Vector<float>>(&wp[i * n + j + 2 * width]);
-            var wj3 = Unsafe.Read<Vector<float>>(&wp[i * n + j + 3 * width]);
-            var xj1 = Unsafe.Read<Vector<float>>(&xp[j + 1 * width]);
-            var xj0 = Unsafe.Read<Vector<float>>(&xp[j + 0 * width]);
-            var xj2 = Unsafe.Read<Vector<float>>(&xp[j + 2 * width]);
-            var xj3 = Unsafe.Read<Vector<float>>(&xp[j + 3 * width]);
+            var wj0 = Vector.Load(wp + (i * n + j + 0 * width));
+            var wj1 = Vector.Load(wp + (i * n + j + 1 * width));
+            var wj2 = Vector.Load(wp + (i * n + j + 2 * width));
+            var wj3 = Vector.Load(wp + (i * n + j + 3 * width));
+            var xj1 = Vector.Load(xp + (j + 1 * width));
+            var xj0 = Vector.Load(xp + (j + 0 * width));
+            var xj2 = Vector.Load(xp + (j + 2 * width));
+            var xj3 = Vector.Load(xp + (j + 3 * width));
             sum0 = fma(wj0, xj0, sum0);
             sum1 = fma(wj1, xj1, sum1);
             sum2 = fma(wj2, xj2, sum2);
